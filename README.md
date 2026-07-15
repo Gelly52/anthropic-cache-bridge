@@ -89,7 +89,7 @@ No third-party Python packages are required.
 ```bash
 git clone <your-repository-url> anthropic-cache-bridge
 cd anthropic-cache-bridge
-./install.sh --upstream https://api.example.com
+sh ./install.sh --upstream https://api.example.com
 ```
 
 If a configuration already exists, the installer preserves it. Use
@@ -97,7 +97,7 @@ If a configuration already exists, the installer preserves it. Use
 settings:
 
 ```bash
-./install.sh --upstream https://api.example.com --force-config
+sh ./install.sh --upstream https://api.example.com --force-config
 ```
 
 On a machine that is already installed, `./install.sh` may be run without
@@ -106,7 +106,7 @@ On a machine that is already installed, `./install.sh` may be run without
 If the upstream benefits from stable routing, supply a non-sensitive stable ID:
 
 ```bash
-./install.sh \
+sh ./install.sh \
   --upstream https://api.example.com \
   --affinity-id my-local-cache-route
 ```
@@ -245,7 +245,7 @@ More detail: [docs/architecture.md](docs/architecture.md),
 ## Tests
 
 ```bash
-./tests/run.sh
+sh ./tests/run.sh
 ```
 
 Tests use only temporary files and do not call an external API.
@@ -253,7 +253,7 @@ Tests use only temporary files and do not call an external API.
 ## Uninstall
 
 ```bash
-./uninstall.sh
+sh ./uninstall.sh
 ```
 
 Uninstall removes the service and binaries but preserves configuration, logs,
