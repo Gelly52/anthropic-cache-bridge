@@ -1,0 +1,12 @@
+{
+  "upstream_url": "https://api.example.com",
+  "proxy_port": 18787,
+  "enable_prompt_cache": true,
+  "enable_thinking_signature": true,
+  "cache_ttl": "5m",
+  "cache_affinity_user_id": "",
+  "signature_ttl": 604800,
+  "signature_limit": 2048,
+  "signature_db_path": "~/.local/share/anthropic-cache-bridge/signatures.sqlite3",
+  "dump_requests": false
+}
