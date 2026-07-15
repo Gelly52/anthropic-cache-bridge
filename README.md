@@ -100,7 +100,7 @@ settings:
 sh ./install.sh --upstream https://api.example.com --force-config
 ```
 
-On a machine that is already installed, `./install.sh` may be run without
+On a machine that is already installed, `sh ./install.sh` may be run without
 `--upstream` to reinstall the program while preserving the existing config.
 
 If the upstream benefits from stable routing, supply a non-sensitive stable ID:
