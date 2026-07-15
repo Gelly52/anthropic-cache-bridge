@@ -1,0 +1,290 @@
+#!/bin/sh
+set -eu
+
+NAME="anthropic-cache-bridge"
+LABEL="io.github.anthropic-cache-bridge"
+CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/$NAME"
+DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/$NAME"
+INSTALL_DIR="$HOME/.local/lib/$NAME"
+CONFIG_FILE="$CONFIG_DIR/config.json"
+PROXY_SCRIPT="$INSTALL_DIR/bridge.py"
+DB_FILE="$DATA_DIR/signatures.sqlite3"
+LOG_FILE="$DATA_DIR/bridge.log"
+PORT="${PROXY_PORT:-18787}"
+OS="$(uname -s)"
+
+usage() {
+    cat <<'EOF'
+Usage: acbctl <command> [arguments]
+
+Commands:
+  start                 Start the user service
+  stop                  Stop the user service
+  restart               Restart the user service
+  status                Show service, listener, and database status
+  logs [-f] [lines]     Show logs (default: 50 lines)
+  db                    Show signature database statistics
+  doctor                Validate configuration and runtime
+  backup                Back up installed files and configuration
+  update <project-dir>  Validate, back up, install all modules, and restart
+  paths                 Print managed paths
+  help                  Show this help
+EOF
+}
+
+mac_service="gui/$(id -u)/$LABEL"
+mac_plist="$HOME/Library/LaunchAgents/$LABEL.plist"
+linux_service="$LABEL.service"
+
+is_running() {
+    case "$OS" in
+        Darwin) launchctl print "$mac_service" >/dev/null 2>&1 ;;
+        Linux) systemctl --user is-active --quiet "$linux_service" ;;
+        *) return 1 ;;
+    esac
+}
+
+start_service() {
+    case "$OS" in
+        Darwin)
+            if launchctl print "$mac_service" >/dev/null 2>&1; then
+                launchctl kickstart "$mac_service"
+            else
+                launchctl bootstrap "gui/$(id -u)" "$mac_plist"
+            fi
+            ;;
+        Linux) systemctl --user enable --now "$linux_service" ;;
+        *) echo "Unsupported OS: $OS" >&2; exit 1 ;;
+    esac
+    echo "Started $NAME"
+}
+
+stop_service() {
+    case "$OS" in
+        Darwin)
+            if launchctl print "$mac_service" >/dev/null 2>&1; then
+                launchctl bootout "$mac_service"
+            fi
+            ;;
+        Linux) systemctl --user stop "$linux_service" ;;
+        *) echo "Unsupported OS: $OS" >&2; exit 1 ;;
+    esac
+    echo "Stopped $NAME"
+}
+
+restart_service() {
+    case "$OS" in
+        Darwin)
+            if launchctl print "$mac_service" >/dev/null 2>&1; then
+                launchctl kickstart -k "$mac_service"
+            else
+                start_service
+                return
+            fi
+            ;;
+        Linux) systemctl --user restart "$linux_service" ;;
+        *) echo "Unsupported OS: $OS" >&2; exit 1 ;;
+    esac
+    echo "Restarted $NAME"
+}
+
+show_db() {
+    if [ ! -f "$DB_FILE" ]; then
+        echo "Signature DB: not created ($DB_FILE)"
+        return
+    fi
+    DB_FILE="$DB_FILE" python3 - <<'PY'
+import os
+import sqlite3
+import stat
+import time
+
+path = os.environ["DB_FILE"]
+mode = stat.S_IMODE(os.stat(path).st_mode)
+db = sqlite3.connect("file:" + path + "?mode=ro", uri=True)
+try:
+    count = db.execute("SELECT COUNT(*) FROM signatures").fetchone()[0]
+    latest = db.execute(
+        "SELECT model, expires_at FROM signatures ORDER BY touched_at DESC LIMIT 1"
+    ).fetchone()
+finally:
+    db.close()
+print(f"Signature DB: {path}")
+print(f"Permissions: {mode:03o}")
+print(f"Records: {count}")
+if latest:
+    remaining = max(0, round(latest[1] - time.time()))
+    print(f"Latest model: {latest[0]}")
+    print(f"Latest TTL: {remaining}s ({remaining / 86400:.2f} days)")
+PY
+}
+
+show_status() {
+    if is_running; then
+        echo "Service: running"
+    else
+        echo "Service: stopped"
+    fi
+    if command -v lsof >/dev/null 2>&1; then
+        lsof -nP -iTCP:"$PORT" -sTCP:LISTEN 2>/dev/null || \
+            echo "Listener: nothing on 127.0.0.1:$PORT"
+    elif command -v ss >/dev/null 2>&1; then
+        ss -tln 2>/dev/null | grep ":$PORT " || \
+            echo "Listener: nothing on 127.0.0.1:$PORT"
+    fi
+    show_db
+}
+
+show_logs() {
+    follow=0
+    lines=50
+    if [ "${1:-}" = "-f" ]; then
+        follow=1
+        shift
+    fi
+    if [ -n "${1:-}" ]; then
+        case "$1" in *[!0-9]*) echo "lines must be a number" >&2; exit 2 ;; esac
+        lines="$1"
+    fi
+    [ -f "$LOG_FILE" ] || { echo "Log not found: $LOG_FILE" >&2; exit 1; }
+    if [ "$follow" -eq 1 ]; then
+        tail -n "$lines" -f "$LOG_FILE"
+    else
+        tail -n "$lines" "$LOG_FILE"
+    fi
+}
+
+make_backup() {
+    stamp="$(date +%Y%m%d-%H%M%S)"
+    backup_dir="$DATA_DIR/backups/$stamp"
+    mkdir -p "$backup_dir"
+    chmod 700 "$DATA_DIR/backups" "$backup_dir"
+    for installed in "$INSTALL_DIR"/*.py; do
+        [ -f "$installed" ] && cp -p "$installed" "$backup_dir/"
+    done
+    [ -f "$CONFIG_FILE" ] && cp -p "$CONFIG_FILE" "$backup_dir/"
+    case "$OS" in
+        Darwin) [ -f "$mac_plist" ] && cp -p "$mac_plist" "$backup_dir/" ;;
+        Linux)
+            unit="$HOME/.config/systemd/user/$linux_service"
+            [ -f "$unit" ] && cp -p "$unit" "$backup_dir/"
+            ;;
+    esac
+    echo "$backup_dir"
+}
+
+update_bridge() {
+    project_dir="$1"
+    source_dir="$project_dir/bin"
+    [ -d "$source_dir" ] || { echo "Project bin directory not found: $source_dir" >&2; exit 1; }
+    for name in anthropic-cache-bridge.py prompt_cache.py thinking_signature.py raw_json.py; do
+        [ -f "$source_dir/$name" ] || { echo "Missing module: $source_dir/$name" >&2; exit 1; }
+        PYTHONPYCACHEPREFIX="${TMPDIR:-/tmp}/acb-pycache" \
+            python3 -m py_compile "$source_dir/$name"
+    done
+    backup_dir="$(make_backup)"
+    cp "$source_dir/anthropic-cache-bridge.py" "$INSTALL_DIR/bridge.py"
+    cp "$source_dir/prompt_cache.py" "$INSTALL_DIR/prompt_cache.py"
+    cp "$source_dir/thinking_signature.py" "$INSTALL_DIR/thinking_signature.py"
+    cp "$source_dir/raw_json.py" "$INSTALL_DIR/raw_json.py"
+    chmod 700 "$INSTALL_DIR"/*.py
+    restart_service
+    echo "Updated bridge"
+    echo "Backup: $backup_dir"
+}
+
+doctor() {
+    failed=0
+    check() {
+        label="$1"
+        shift
+        if "$@" >/dev/null 2>&1; then
+            echo "PASS  $label"
+        else
+            echo "FAIL  $label"
+            failed=1
+        fi
+    }
+    check "Python 3 available" command -v python3
+    check "bridge script exists" test -f "$PROXY_SCRIPT"
+    check "bridge script is executable" test -x "$PROXY_SCRIPT"
+    check "configuration exists" test -f "$CONFIG_FILE"
+    check "configuration is private (600)" test "$(stat_mode "$CONFIG_FILE")" = 600
+    for installed in "$INSTALL_DIR"/*.py; do
+        check "Python syntax $(basename "$installed")" \
+            env PYTHONPYCACHEPREFIX="${TMPDIR:-/tmp}/acb-pycache" \
+            python3 -m py_compile "$installed"
+    done
+    check "service running" is_running
+    check "port $PORT listening" port_listening
+    if [ -f "$DB_FILE" ]; then
+        check "signature DB is private (600)" test "$(stat_mode "$DB_FILE")" = 600
+    else
+        echo "INFO  signature DB will be created after the first captured signature"
+    fi
+    CONFIG_FILE="$CONFIG_FILE" python3 - <<'PY' || failed=1
+import json
+import os
+path = os.environ["CONFIG_FILE"]
+try:
+    with open(path, encoding="utf-8") as stream:
+        config = json.load(stream)
+    upstream = config.get("upstream_url", "")
+    if not upstream.startswith(("http://", "https://")):
+        raise ValueError("upstream_url must be an HTTP(S) URL")
+except Exception as exc:
+    print(f"FAIL  configuration: {exc}")
+    raise SystemExit(1)
+print("PASS  configuration JSON and upstream URL")
+PY
+    [ "$failed" -eq 0 ] || exit 1
+    echo "Doctor checks passed"
+}
+
+stat_mode() {
+    case "$OS" in
+        Darwin) stat -f '%Lp' "$1" 2>/dev/null || true ;;
+        *) stat -c '%a' "$1" 2>/dev/null || true ;;
+    esac
+}
+
+port_listening() {
+    if command -v lsof >/dev/null 2>&1; then
+        lsof -nP -iTCP:"$PORT" -sTCP:LISTEN >/dev/null 2>&1
+    elif command -v ss >/dev/null 2>&1; then
+        ss -tln 2>/dev/null | grep -q ":$PORT "
+    else
+        return 1
+    fi
+}
+
+show_paths() {
+    cat <<EOF
+Config: $CONFIG_FILE
+Bridge: $PROXY_SCRIPT
+Log: $LOG_FILE
+Signature DB: $DB_FILE
+macOS plist: $mac_plist
+Linux unit: $HOME/.config/systemd/user/$linux_service
+EOF
+}
+
+command_name="${1:-help}"
+shift || true
+case "$command_name" in
+    start) start_service ;;
+    stop) stop_service ;;
+    restart) restart_service ;;
+    status) show_status ;;
+    logs) show_logs "$@" ;;
+    db) show_db ;;
+    doctor) doctor ;;
+    backup) make_backup ;;
+    update)
+        [ "$#" -eq 1 ] || { echo "Usage: acbctl update <project-dir>" >&2; exit 2; }
+        update_bridge "$1"
+        ;;
+    paths) show_paths ;;
+    help|-h|--help) usage ;;
+    *) echo "Unknown command: $command_name" >&2; usage >&2; exit 2 ;;
+esac
