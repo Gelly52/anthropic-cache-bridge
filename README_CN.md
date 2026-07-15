@@ -93,7 +93,7 @@ sh ./install.sh --upstream https://api.example.com
 sh ./install.sh --upstream https://api.example.com --force-config
 ```
 
-已经安装过的机器可以直接执行 `./install.sh` 重新安装程序，同时保留现有配置。
+已经安装过的机器可以直接执行 `sh ./install.sh` 重新安装程序，同时保留现有配置。
 
 如果上游需要稳定路由，可设置一个不敏感的固定 ID：
 
