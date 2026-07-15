@@ -4,7 +4,7 @@ A dependency-free local reverse proxy for Anthropic-compatible APIs. It adds
 prompt-cache breakpoints and repairs missing thinking signatures while
 preserving the original request bytes.
 
-中文说明：[README_CN.md](README_CN.md)
+[README_CN.md](中文说明)
 
 ## Problem
 
