@@ -83,14 +83,14 @@ signature 的客户端。
 ```bash
 git clone <你的仓库地址> anthropic-cache-bridge
 cd anthropic-cache-bridge
-./install.sh --upstream https://api.example.com
+sh ./install.sh --upstream https://api.example.com
 ```
 
 如果配置已经存在，安装器默认保留现有配置。只有明确要替换上游和缓存设置时
 才使用 `--force-config`：
 
 ```bash
-./install.sh --upstream https://api.example.com --force-config
+sh ./install.sh --upstream https://api.example.com --force-config
 ```
 
 已经安装过的机器可以直接执行 `./install.sh` 重新安装程序，同时保留现有配置。
@@ -98,7 +98,7 @@ cd anthropic-cache-bridge
 如果上游需要稳定路由，可设置一个不敏感的固定 ID：
 
 ```bash
-./install.sh \
+sh ./install.sh \
   --upstream https://api.example.com \
   --affinity-id my-local-cache-route
 ```
@@ -216,7 +216,7 @@ Thinking Signature 模块验证：
 ## 测试
 
 ```bash
-./tests/run.sh
+sh ./tests/run.sh
 ```
 
 测试只使用临时文件，不会请求外部 API。
@@ -224,7 +224,7 @@ Thinking Signature 模块验证：
 ## 卸载
 
 ```bash
-./uninstall.sh
+sh ./uninstall.sh
 ```
 
 卸载会移除服务和程序，但保留配置、日志、备份和 signature 数据库。确认不再
